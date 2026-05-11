@@ -64,6 +64,7 @@ export class ClientQuest extends Client {
 			token: token,
 			intents: 0,
 			rest,
+			readyTimeout: 120_000,
 		});
 		gateway.fetchGatewayInformation = (
 			force?: boolean,
