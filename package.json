@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "tsx --env-file=.env bot.ts",
+    "start:bot": "tsx index.ts",
     "dev": "tsx --env-file=.env --inspect-brk bot.ts",
     "github": "tsx bot.ts"
   },
@@ -25,6 +26,7 @@
     "@discordjs/core": "2.4.0",
     "@discordjs/rest": "2.6.0",
     "@discordjs/ws": "2.0.4",
-    "undici": "^6.24.1"
+    "undici": "^6.24.1",
+    "discord.js": "^14.14.1"
   }
 }
