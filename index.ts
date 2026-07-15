@@ -152,6 +152,7 @@ async function initBot() {
         return embed;
     }
 
+    // ====== ĐĂNG KÝ SLASH COMMAND ======
     client.once('ready', async () => {
         console.log(`✅ Bot Discord đã online: ${client.user?.tag}`);
         
@@ -177,6 +178,15 @@ async function initBot() {
                 .setName('status')
                 .setDescription('Xem trạng thái bot hiện tại'),
             new SlashCommandBuilder()
+                .setName('log')
+                .setDescription('Xem log gần nhất')
+                .addIntegerOption(option =>
+                    option.setName('lines')
+                        .setDescription('Số dòng log muốn xem (mặc định 20)')
+                        .setMinValue(1)
+                        .setMaxValue(100)
+                ),
+            new SlashCommandBuilder()
                 .setName('help')
                 .setDescription('Hiển thị hướng dẫn sử dụng bot'),
         ];
@@ -190,12 +200,13 @@ async function initBot() {
                 { body: commands }
             );
             console.log('✅ Đã đăng ký slash command thành công!');
-            console.log('📋 Slash Command: /token, /complete, /mytoken, /deltoken, /status, /help');
+            console.log('📋 Slash Command: /token, /complete, /mytoken, /deltoken, /status, /log, /help');
         } catch (error) {
             console.error('❌ Lỗi đăng ký slash command:', error);
         }
     });
 
+    // ====== XỬ LÝ INTERACTION ======
     client.on('interactionCreate', async (interaction) => {
         if (!interaction.isChatInputCommand()) return;
 
@@ -284,7 +295,6 @@ async function initBot() {
             isRunning = true;
             const startTime = Date.now();
             
-            // Embed bắt đầu
             const startEmbed = createEmbed(
                 '🚀 Bắt đầu auto-complete quest!',
                 'Quá trình đang được thực thi...',
@@ -304,7 +314,6 @@ async function initBot() {
                 
                 const duration = ((Date.now() - startTime) / 60000).toFixed(1);
                 
-                // Embed thành công
                 const successEmbed = createEmbed(
                     '✅ Hoàn thành!',
                     'Quest đã được hoàn thành thành công.',
@@ -323,7 +332,6 @@ async function initBot() {
             } catch (error: any) {
                 console.error('❌ Lỗi khi chạy quest:', error);
                 
-                // Embed lỗi
                 const errorEmbed = createEmbed(
                     '❌ Lỗi xảy ra!',
                     'Quest đã thất bại hoặc xảy ra lỗi.',
@@ -405,6 +413,41 @@ async function initBot() {
         if (commandName === 'status') {
             const token = getUserToken(user.id);
             
+            let logContent = 'Chưa có log nào.';
+            let logFileExists = false;
+            let logFileSize = 0;
+            let lastModified = 'Không có';
+            
+            try {
+                const logFiles = fs.readdirSync(__dirname).filter(f => f.endsWith('.log'));
+                
+                if (logFiles.length > 0) {
+                    const latestLog = logFiles.sort((a, b) => {
+                        return fs.statSync(path.join(__dirname, b)).mtime.getTime() - 
+                               fs.statSync(path.join(__dirname, a)).mtime.getTime();
+                    })[0];
+                    
+                    const logPath = path.join(__dirname, latestLog);
+                    const stats = fs.statSync(logPath);
+                    
+                    logFileExists = true;
+                    logFileSize = stats.size;
+                    lastModified = stats.mtime.toLocaleString('vi-VN');
+                    
+                    const content = fs.readFileSync(logPath, 'utf-8');
+                    const lines = content.split('\n').filter(line => line.trim());
+                    const lastLines = lines.slice(-50).join('\n');
+                    
+                    if (lastLines) {
+                        logContent = `\`\`\`\n${lastLines}\n\`\`\``;
+                    } else {
+                        logContent = 'File log trống.';
+                    }
+                }
+            } catch (error: any) {
+                logContent = `❌ Lỗi đọc log: ${error.message}`;
+            }
+            
             const statusEmbed = createEmbed(
                 '📊 Trạng thái bot',
                 'Thông tin trạng thái hiện tại của bot.',
@@ -415,13 +458,78 @@ async function initBot() {
                     { name: '👤 Người dùng', value: user.tag, inline: true },
                     { name: '🤖 Bot', value: client.user?.tag || 'Unknown', inline: true },
                     { name: '📋 Server', value: interaction.guild?.name || 'DM', inline: true },
-                    { name: '⏱️ Ping', value: `${client.ws.ping}ms`, inline: true }
+                    { name: '⏱️ Ping', value: `${client.ws.ping}ms`, inline: true },
+                    { name: '📁 Log file', value: logFileExists ? `✅ Tồn tại (${(logFileSize / 1024).toFixed(1)} KB)` : '❌ Không có', inline: true },
+                    { name: '🕐 Cập nhật log', value: lastModified, inline: true },
+                    { name: '📝 Log (50 dòng cuối)', value: logContent, inline: false }
                 ],
                 'https://cdn.discordapp.com/emojis/1234567892.png',
                 `ID: ${user.id}`
             );
             
+            if (statusEmbed.data.fields && statusEmbed.data.fields.length > 0) {
+                const logField = statusEmbed.data.fields[statusEmbed.data.fields.length - 1];
+                if (logField && logField.value.length > 1000) {
+                    logField.value = logField.value.substring(0, 1000) + '\n... (còn nữa)';
+                }
+            }
+            
             await interaction.reply({ embeds: [statusEmbed], ephemeral: true });
+            return;
+        }
+
+        // ====== /LOG ======
+        if (commandName === 'log') {
+            const lines = interaction.options.getInteger('lines') || 20;
+            
+            try {
+                const logFiles = fs.readdirSync(__dirname).filter(f => f.endsWith('.log'));
+                
+                if (logFiles.length === 0) {
+                    await interaction.reply({
+                        embeds: [createEmbed(
+                            '📁 Không có log',
+                            'Chưa có file log nào được tạo.',
+                            0xFFA500
+                        )],
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const latestLog = logFiles.sort((a, b) => {
+                    return fs.statSync(path.join(__dirname, b)).mtime.getTime() - 
+                           fs.statSync(path.join(__dirname, a)).mtime.getTime();
+                })[0];
+                
+                const logPath = path.join(__dirname, latestLog);
+                const content = fs.readFileSync(logPath, 'utf-8');
+                const logLines = content.split('\n').filter(line => line.trim());
+                const lastLines = logLines.slice(-lines).join('\n');
+                
+                await interaction.reply({
+                    embeds: [createEmbed(
+                        `📝 Log từ ${latestLog}`,
+                        `Hiển thị ${Math.min(lines, logLines.length)}/${logLines.length} dòng cuối:`,
+                        0x5865F2,
+                        [
+                            { name: '📄 Nội dung', value: `\`\`\`\n${lastLines || 'Không có nội dung'}\n\`\`\``, inline: false },
+                            { name: '📊 Tổng số dòng', value: `${logLines.length} dòng`, inline: true },
+                            { name: '🕐 Cập nhật', value: fs.statSync(logPath).mtime.toLocaleString('vi-VN'), inline: true }
+                        ]
+                    )],
+                    ephemeral: true
+                });
+            } catch (error: any) {
+                await interaction.reply({
+                    embeds: [createEmbed(
+                        '❌ Lỗi đọc log',
+                        `Không thể đọc log: ${error.message}`,
+                        0xFF0000
+                    )],
+                    ephemeral: true
+                });
+            }
             return;
         }
 
@@ -438,6 +546,7 @@ async function initBot() {
                         { name: '🔹 `/mytoken`', value: 'Xem token đã lưu (ẩn một phần)', inline: false },
                         { name: '🔹 `/deltoken`', value: 'Xóa token của bạn', inline: false },
                         { name: '🔹 `/status`', value: 'Xem trạng thái bot hiện tại', inline: false },
+                        { name: '🔹 `/log [số dòng]`', value: 'Xem log gần nhất (mặc định 20 dòng)', inline: false },
                         { name: '🔹 `/help`', value: 'Hiển thị hướng dẫn này', inline: false }
                     ],
                     null,
@@ -449,9 +558,11 @@ async function initBot() {
         }
     });
 
+    // ====== ĐĂNG NHẬP BOT ======
     client.login(BOT_TOKEN).catch((error) => {
         console.error('❌ Đăng nhập bot thất bại:', error);
     });
 }
 
+// ====== CHẠY BOT ======
 initBot();
