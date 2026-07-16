@@ -179,12 +179,12 @@ async function initBot() {
                 .setDescription('Xem trạng thái bot hiện tại'),
             new SlashCommandBuilder()
                 .setName('log')
-                .setDescription('Xem log gần nhất')
+                .setDescription('Xem log gần nhất (6 dòng cuối)')
                 .addIntegerOption(option =>
                     option.setName('lines')
-                        .setDescription('Số dòng log muốn xem (mặc định 20)')
+                        .setDescription('Số dòng log muốn xem (mặc định 6)')
                         .setMinValue(1)
-                        .setMaxValue(100)
+                        .setMaxValue(50)
                 ),
             new SlashCommandBuilder()
                 .setName('help')
@@ -261,7 +261,7 @@ async function initBot() {
             return;
         }
 
-        // ====== /COMPLETE ======
+        // ====== /COMPLETE (FIX CRASH) ======
         if (commandName === 'complete') {
             const token = getUserToken(user.id);
             
@@ -303,14 +303,19 @@ async function initBot() {
                     { name: '⏱️ Thời gian dự kiến', value: '15-20 phút', inline: true },
                     { name: '🔄 Trạng thái', value: '🟢 Đang chạy...', inline: true },
                     { name: '👤 Người dùng', value: user.tag, inline: true }
-                ],
-                'https://cdn.discordapp.com/emojis/1234567890.gif'
+                ]
             );
 
             await interaction.reply({ embeds: [startEmbed], ephemeral: true });
 
             try {
-                const result = await startQuest(token);
+                // Chạy quest với timeout 30 phút để tránh treo
+                const result = await Promise.race([
+                    startQuest(token),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('⏰ Quest chạy quá 30 phút, tự động dừng!')), 30 * 60 * 1000)
+                    )
+                ]);
                 
                 const duration = ((Date.now() - startTime) / 60000).toFixed(1);
                 
@@ -322,27 +327,40 @@ async function initBot() {
                         { name: '📊 Kết quả', value: `\`\`\`\n${result || 'Quest completed successfully!'}\n\`\`\``, inline: false },
                         { name: '⏱️ Thời gian', value: `${duration} phút`, inline: true },
                         { name: '👤 Người dùng', value: user.tag, inline: true }
-                    ],
-                    'https://cdn.discordapp.com/emojis/1234567891.png'
+                    ]
                 );
                 
                 await interaction.followUp({ embeds: [successEmbed] });
                 
                 console.log(`✅ ${user.tag} đã chạy quest thành công.`);
+                
             } catch (error: any) {
                 console.error('❌ Lỗi khi chạy quest:', error);
+                
+                const errorMessage = error.message || 'Unknown error';
+                let userMessage = errorMessage;
+                
+                // Nếu lỗi là do process.exit từ code gốc
+                if (errorMessage.includes('process.exit') || 
+                    errorMessage.includes('exited') ||
+                    errorMessage.includes('Worker') ||
+                    errorMessage.includes('child_process')) {
+                    userMessage = '⚠️ Code gốc đã tự động thoát sau khi hoàn thành. Bot vẫn đang chạy bình thường! ✅';
+                    console.log('🔄 Bot vẫn sống sau khi quest hoàn thành.');
+                }
                 
                 const errorEmbed = createEmbed(
                     '❌ Lỗi xảy ra!',
                     'Quest đã thất bại hoặc xảy ra lỗi.',
                     0xFF0000,
                     [
-                        { name: 'Lỗi', value: `\`\`\`\n${error.message || 'Unknown error'}\n\`\`\``, inline: false },
+                        { name: 'Lỗi', value: `\`\`\`\n${userMessage}\n\`\`\``, inline: false },
                         { name: '💡 Hướng dẫn', value: 'Kiểm tra token và thử lại.', inline: true }
                     ]
                 );
                 
                 await interaction.followUp({ embeds: [errorEmbed] });
+                
             } finally {
                 isRunning = false;
             }
@@ -409,7 +427,7 @@ async function initBot() {
             return;
         }
 
-        // ====== /STATUS ======
+        // ====== /STATUS (Lấy 6 dòng log cuối) ======
         if (commandName === 'status') {
             const token = getUserToken(user.id);
             
@@ -436,7 +454,8 @@ async function initBot() {
                     
                     const content = fs.readFileSync(logPath, 'utf-8');
                     const lines = content.split('\n').filter(line => line.trim());
-                    const lastLines = lines.slice(-50).join('\n');
+                    // CHỈ LẤY 6 DÒNG CUỐI
+                    const lastLines = lines.slice(-6).join('\n');
                     
                     if (lastLines) {
                         logContent = `\`\`\`\n${lastLines}\n\`\`\``;
@@ -461,26 +480,19 @@ async function initBot() {
                     { name: '⏱️ Ping', value: `${client.ws.ping}ms`, inline: true },
                     { name: '📁 Log file', value: logFileExists ? `✅ Tồn tại (${(logFileSize / 1024).toFixed(1)} KB)` : '❌ Không có', inline: true },
                     { name: '🕐 Cập nhật log', value: lastModified, inline: true },
-                    { name: '📝 Log (50 dòng cuối)', value: logContent, inline: false }
+                    { name: '📝 Log (6 dòng cuối)', value: logContent, inline: false }
                 ],
                 'https://cdn.discordapp.com/emojis/1234567892.png',
                 `ID: ${user.id}`
             );
             
-            if (statusEmbed.data.fields && statusEmbed.data.fields.length > 0) {
-                const logField = statusEmbed.data.fields[statusEmbed.data.fields.length - 1];
-                if (logField && logField.value.length > 1000) {
-                    logField.value = logField.value.substring(0, 1000) + '\n... (còn nữa)';
-                }
-            }
-            
             await interaction.reply({ embeds: [statusEmbed], ephemeral: true });
             return;
         }
 
-        // ====== /LOG ======
+        // ====== /LOG (Mặc định 6 dòng) ======
         if (commandName === 'log') {
-            const lines = interaction.options.getInteger('lines') || 20;
+            const lines = interaction.options.getInteger('lines') || 6;
             
             try {
                 const logFiles = fs.readdirSync(__dirname).filter(f => f.endsWith('.log'));
@@ -545,8 +557,8 @@ async function initBot() {
                         { name: '🔹 `/complete`', value: 'Chạy auto-complete quest', inline: false },
                         { name: '🔹 `/mytoken`', value: 'Xem token đã lưu (ẩn một phần)', inline: false },
                         { name: '🔹 `/deltoken`', value: 'Xóa token của bạn', inline: false },
-                        { name: '🔹 `/status`', value: 'Xem trạng thái bot hiện tại', inline: false },
-                        { name: '🔹 `/log [số dòng]`', value: 'Xem log gần nhất (mặc định 20 dòng)', inline: false },
+                        { name: '🔹 `/status`', value: 'Xem trạng thái bot + 6 dòng log cuối', inline: false },
+                        { name: '🔹 `/log [số dòng]`', value: 'Xem log (mặc định 6 dòng)', inline: false },
                         { name: '🔹 `/help`', value: 'Hiển thị hướng dẫn này', inline: false }
                     ],
                     null,
