@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
-import { spawn } from 'child_process';
+import { exec } from 'child_process';
 
 // Lấy đường dẫn thư mục hiện tại
 const __filename = fileURLToPath(import.meta.url);
@@ -78,61 +78,35 @@ function deleteToken(userId: string): boolean {
 // ====== RUN QUEST IN CHILD PROCESS (FIX CRASH) ======
 async function runQuestInChildProcess(token: string): Promise<string> {
     return new Promise((resolve, reject) => {
-        const tempScript = path.join(__dirname, 'temp-quest.js');
-        
-        // Create temporary script to run quest
-        const scriptContent = `
-            const { exec } = require('child_process');
-            const fs = require('fs');
-            const path = require('path');
-            
-            // Write token to .env
-            const envPath = path.join(__dirname, '.env');
-            fs.writeFileSync(envPath, 'TOKEN=${token}\\n');
-            
-            // Run bot.ts and capture output
-            const child = exec('npx tsx bot.ts', {
-                cwd: __dirname,
-                env: { ...process.env, TOKEN: token }
-            });
-            
-            let output = '';
-            child.stdout.on('data', (data) => { output += data; });
-            child.stderr.on('data', (data) => { output += data; });
-            
-            child.on('close', (code) => {
-                if (code === 0) {
-                    process.stdout.write(output);
-                    process.exit(0);
-                } else {
-                    process.stderr.write(output);
-                    process.exit(1);
-                }
-            });
-        `;
-        
-        fs.writeFileSync(tempScript, scriptContent);
-        
-        const child = spawn('node', [tempScript], {
+        // Chạy bot.ts với token truyền vào
+        const child = exec(`TOKEN="${token}" npx tsx bot.ts`, {
             cwd: __dirname,
-            stdio: 'pipe'
+            maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+            env: { ...process.env, TOKEN: token }
         });
         
         let output = '';
-        child.stdout.on('data', (data) => { output += data.toString(); });
-        child.stderr.on('data', (data) => { output += data.toString(); });
+        let errorOutput = '';
         
-        child.on('close', (code) => {
-            try { fs.unlinkSync(tempScript); } catch (e) {}
+        child.stdout?.on('data', (data: string) => {
+            output += data;
+            console.log(data);
+        });
+        
+        child.stderr?.on('data', (data: string) => {
+            errorOutput += data;
+            console.error(data);
+        });
+        
+        child.on('close', (code: number) => {
             if (code === 0) {
                 resolve(output || 'Quest completed successfully!');
             } else {
-                reject(new Error(`Quest failed with code ${code}:\n${output}`));
+                reject(new Error(`Quest failed with code ${code}:\n${errorOutput || output || 'Unknown error'}`));
             }
         });
         
-        child.on('error', (err) => {
-            try { fs.unlinkSync(tempScript); } catch (e) {}
+        child.on('error', (err: Error) => {
             reject(err);
         });
     });
@@ -325,7 +299,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [startEmbed], ephemeral: true });
 
         try {
-            // Run quest in child process (FIX CRASH)
+            // Run quest in child process
             const result = await runQuestInChildProcess(token);
             
             const duration = ((Date.now() - startTime) / 60000).toFixed(1);
